@@ -1,0 +1,92 @@
+name: Daily Stock Analysis
+
+# 每日股票分析 —— fork 自 ZhuLinsen/daily_stock_analysis
+# 配置全部通过仓库 Secret `ENV_FILE` 注入（内容就是本地 daily_stock_analysis/.env 全文），
+# 因此不需要在这里逐个列举几十个变量名。
+#
+# 定时：UTC 22:30 周一~周五 = 新西兰时间次日 11:30 (NZDT) / 10:30 (NZST)
+#       —— 在美股收盘（16:00 ET）之后跑，报告是"隔夜美股 + 大盘复盘"。
+
+on:
+  schedule:
+    - cron: '30 22 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      force_run:
+        description: '跳过交易日检查，强制执行（默认 true）'
+        type: boolean
+        default: true
+      no_notify:
+        description: '只跑不发 Telegram（默认 false）'
+        type: boolean
+        default: false
+
+concurrency:
+  group: daily-stock-analysis
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TZ: Asia/Shanghai
+      PYTHONUNBUFFERED: '1'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Write .env from secret ENV_FILE
+        env:
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: |
+          if [ -z "$ENV_FILE" ]; then
+            echo "::error::Secret ENV_FILE 未配置"
+            exit 1
+          fi
+          printf '%s\n' "$ENV_FILE" > .env
+          mkdir -p data logs reports
+          echo "已写入 .env，包含以下配置项（只显示名字，不显示值）："
+          grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' .env | tr -d '=' | sort | tr '\n' ' '
+          echo
+
+      - name: Sanity check config (no send)
+        run: python main.py --check-notify || true
+
+      - name: Run analysis
+        run: |
+          ARGS=""
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.force_run }}" = "true" ]; then
+            ARGS="$ARGS --force-run"
+          fi
+          if [ "${{ inputs.no_notify }}" = "true" ]; then
+            ARGS="$ARGS --no-notify"
+          fi
+          echo "python main.py $ARGS"
+          python main.py $ARGS
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-${{ github.run_number }}
+          path: |
+            reports/
+            logs/
+          retention-days: 14
+          if-no-files-found: ignore
