@@ -70,7 +70,7 @@ jobs:
 
       - name: Run analysis
         run: |
-          ARGS=""
+          ARGS="--market-review"
           if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.force_run }}" = "true" ]; then
             ARGS="$ARGS --force-run"
           fi
